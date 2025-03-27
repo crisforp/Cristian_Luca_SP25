@@ -139,26 +139,119 @@ aggregates counts for each release year.
 - ORDER BY f.release_year DESC:
 sorts results by release year in descending order.
 
- */
+ 
+ 
+ 
+Part 2: Solve the following problems using SQL
 
--- Part 2: Solve the following problems using SQL
-
-/*
- 1. Which three employees generated the most revenue in 2017? 
- They should be awarded a bonus for their outstanding performance. 
+1. Which three employees generated the most revenue in 2017? They should be awarded a bonus for their outstanding performance. 
 
 Assumptions: 
 staff could work in several stores in a year, please indicate which store the staff worked in (the last one);
 if staff processed the payment then he works in the same store; 
 take into account only payment_date
-
-2. Which 5 movies were rented more than others (number of rentals), 
-and what's the expected age of the audience for these movies? 
-To determine expected age please use 'Motion Picture Association film rating system
-
 */
 
---Can these tasks be solved using CTE? I'm studying! Thank you so much!
+WITH staff_revenue AS (  --First part
+    SELECT 
+                  p.staff_id, 
+                  SUM(p.amount) AS total_revenue
+    FROM payment p
+    WHERE EXTRACT(YEAR FROM p.payment_date) = 2017
+    GROUP BY p.staff_id
+)
+SELECT                            --Third part
+              s_r.staff_id, 
+              s.first_name, 
+              s.last_name, 
+    (
+        SELECT s2.store_id   --Second part
+        FROM payment p2
+        JOIN staff s2 ON p2.staff_id = s2.staff_id
+        WHERE p2.staff_id = s_r.staff_id
+        ORDER BY p2.payment_date DESC 
+        LIMIT 1
+    ) AS store_id,
+    s_r.total_revenue
+FROM staff_revenue s_r
+JOIN staff s ON s_r.staff_id = s.staff_id
+ORDER BY s_r.total_revenue DESC
+LIMIT 3;
+
+/*Explanation:
+ 
+First part (CTE, operator WITH) --->  calculate total revenue for every staff for 2017:
+-get only payments from 2017 (EXTRACT(YEAR FROM p.payment_date) = 2017).
+-groups data by staff_id.
+-calculates total revenue (SUM(p.amount)) for every staff.
+
+Second part(subquery) ---> for each staff in staff_revenue find the last store the staff worked in:
+-finds all their payment transactions (FROM payment p2).
+-joins with staff to get the store_id (JOIN staff s2 ON p2.staff_id = s2.staff_id).
+-filters records only for the current staff (WHERE p2.staff_id = sr.staff_id).
+-sorts by payment_date DESC to obtain the most recent payment.
+-I use LIMIT 1 to return only the last store.
+
+Third part:
+- joins the staff_revenue table with the staff table to get names.
+- fetches the last store using subquery.
+-sorts by total revenue in descending order (ORDER BY sr.total_revenue DESC).
+- I use LIMIT 3 to return three employees generated the most revenue in 2017.
+
+ */
+
+
+/*
+ Part 2: Solve the following problems using SQL
+ 
+ 2. Which 5 movies were rented more than others (number of rentals), 
+ and what's the expected age of the audience for these movies? 
+ To determine expected age please use 'Motion Picture Association film rating system
+ */
+
+-- I broke this task in two parts:
+-- First part: count the number of times each film was rented.
+-- Second part: determine expected audience age using 'Motion Picture Association' film rating system.
+
+WITH movie_rentals AS ( -- First part
+    SELECT 
+                  f.film_id,
+                  f.title,
+                  f.mpaa_rating,
+                  COUNT(r.rental_id) AS rental_count
+    FROM rental r
+    JOIN inventory i ON r.inventory_id = i.inventory_id
+    JOIN film f ON i.film_id = f.film_id
+    GROUP BY f.film_id, f.title, f.mpaa_rating
+)
+SELECT                      -- Second part
+              film_id, 
+              title, 
+              rental_count, 
+              mpaa_rating, 
+    CASE 
+              WHEN mpaa_rating = 'G' THEN 'all ages'
+              WHEN mpaa_rating = 'PG' THEN 'ages >= 8'
+              WHEN mpaa_rating = 'PG-13' THEN 'ages >= 13'
+              WHEN mpaa_rating = 'R' THEN 'ages >= 17'
+              WHEN mpaa_rating = 'NC-17' THEN 'ages >=18'
+              ELSE 'unknown'
+    END AS expected_audience_age
+FROM movie_rentals
+ORDER BY rental_count DESC
+LIMIT 5;
+    
+/*
+Explanation:
+ 
+- count rentals for every film (COUNT(r.rental_id) AS rental_count):
+joins rental ---> inventory --> film to count rentals for every film_id.
+- group by film (GROUP BY f.film_id, f.title, f.mpaa_rating):
+ensures I get counts for every  movie.
+- determine expected_audience_age (CASE Statement):
+using recomended 'Motion Picture Association' film rating system.
+ */
+
 
 
 --Part 3. Which actors/actresses didn't act for a longer period of time than the others? 
@@ -193,6 +286,5 @@ ensures I get the most recent movie for each unique actor.
 
  */
  
---V2: gaps between sequential films per each actor;
--- Can this task be solved using CTE? I'm studying! Thank you so much! 
+
 
