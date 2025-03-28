@@ -2,67 +2,33 @@
 
 --All animation movies released between 2017 and 2019 with rate more than 1, alphabetical
 
-SELECT f.title,
-            f.release_year, 
-            f.rental_rate
-FROM film f
-            inner JOIN film_category f_c ON f.film_id = f_c.film_id
-            inner JOIN category c ON fc.category_id = c.category_id
-WHERE c.name = 'Animation'
-            AND f.release_year BETWEEN 2017 AND 2019
-            AND f.rental_rate > 1
-ORDER BY f.title;
 
-/*
- Explanation:
- 
-- film (f): contains movie details (title, release_year, rental_rate).
-- film_category (f_c): a bridge table that handles the many-to-many relationship between film and category.
-- inner JOIN film_category fc ON f.film_id = fc.film_id:
-connects the film table with film_category, ensuring we only retrieve films that have an entry in the film_category table.
-- inner JOIN category c ON fc.category_id = c.category_id:
-links film_category with category, allowing us to filter animation movies (c.name = 'Animation').
-- category (c): a table which contains film genres or classifications with primary key category_id.
-- release_year BETWEEN 2017 AND 2019:  filter years with releases from 2017 to 2019.
-- rental_rate > 1: filter only movies with a rate greater than 1.
-- ORDER BY f.title: sorting alphabetical order.
+SELECT f.title AS movie_name
+FROM public.film f                                                           -- film (f): contains movie details such as title aliasing movie_name                                    
+                                                                                         -- film_category (f_c): a bridge table that handles the many-to-many relationship between film and category
+INNER JOIN public.film_category f_c ON f.film_id = f_c.film_id    --connects the film table with film_category, ensuring we only retrieve films that have an entry in the film_category table
+            INNER JOIN public.category c ON f_c.category_id = c.category_id   --links film_category with category
+WHERE upper(c.name) = upper( 'Animation')                 -- filter animation movies
+            AND f.release_year BETWEEN 2017 AND 2019  -- filter years with releases from 2017 to 2019
+            AND f.rental_rate > 1                                            -- filter only movies with a rate greater than 1
+ORDER BY movie_name;                                                 -- sorting alphabetical order
 
- */
 
 -- The revenue earned by each rental store after March 2017 (columns: address and address2 – as one column, revenue)
 
 SELECT 
-           a.address ||' '||COALESCE(a.address2, '') AS entire_address,
-           SUM(p.amount) AS revenue
-FROM payment p
-          JOIN rental r ON p.rental_id = r.rental_id
-          JOIN inventory i ON r.inventory_id = i.inventory_id
-          JOIN store s ON i.store_id = s.store_id
-          JOIN address a ON s.address_id = a.address_id
-WHERE p.payment_date >= '2017-04-01'
-GROUP BY entire_address
-ORDER BY revenue DESC;
+            trim(a.address ||' '||COALESCE(a.address2, ''))  AS entire_address,  -- leading/trailing/both ---> concatenate address and address2 into one column; COALESCE() is used to handle NULL values in address2
+            SUM(p.amount) AS revenue                                                              -- aggregates the total revenue for each store from the payment table
+FROM public.payment p
+            INNER JOIN public.rental r ON p.rental_id = r.rental_id                 -- links payments to rentals
+            INNER JOIN public.inventory i ON r.inventory_id = i.inventory_id  -- finds which inventory item was rented
+            INNER JOIN public.store s ON i.store_id = s.store_id                     -- identifies the store
+            INNER JOIN public.address a ON s.address_id = a.address_id         -- fetches the store's address
+WHERE p.payment_date >= '2017-04-01'                                                     -- filters payments made after March 2017
+GROUP BY entire_address                                                                           -- groups results by store address to calculate revenue for each store
+ORDER BY revenue DESC;                                                                        -- sorts stores from highest to smallest revenue
 
-/*
- Explanation:
- 
-- a.address ||' ' || COALESCE(a.address2, '')) AS enire_address:
-concatenate address and address2 into one column; COALESCE() is used to handle NULL values in address2.
-- SUM(p.amount) AS revenue:
-aggregates the total revenue for each store from the payment table.
-- joins:
-payment → rental: links payments to rentals.
-rental → inventory: finds which inventory item was rented.
-inventory → store: identifies the store.
-store → address: Fetches the store's address.
-- WHERE p.payment_date > '2017-04-01':
-filters payments made after March 2017.
-- GROUP BY entire_address:
-groups results by store address to calculate revenue for each store.
-- ORDER BY revenue DESC:
-sorts stores from highest to smallest revenue.
 
- * */
 
 --Top-5 actors by number of movies (released after 2015) they took part in 
 --(columns: first_name, last_name, number_of_movies, sorted by number_of_movies in descending order)
@@ -70,34 +36,15 @@ sorts stores from highest to smallest revenue.
 SELECT 
               a.first_name, 
               a.last_name, 
-              COUNT(f.film_id) AS number_movies
-FROM actor a
-              inner JOIN film_actor f_a ON a.actor_id = f_a.actor_id
-              inner JOIN film f ON f_a.film_id = f.film_id
-WHERE f.release_year > 2015
-GROUP BY a.actor_id, a.first_name, a.last_name
-ORDER BY number_movies DESC
-LIMIT 5;
+              COUNT(f.film_id) AS number_movies                                             -- counts the number of films each actor appeared in
+FROM   public.actor a
+              INNER JOIN public.film_actor f_a ON a.actor_id = f_a.actor_id     -- links actors to the movies they acted in
+              INNER JOIN public.film f ON f_a.film_id = f.film_id                    -- gets movie details, including the release year
+WHERE f.release_year > 2015                                                                       -- filters only movies released after 2015
+GROUP BY a.actor_id, a.first_name, a.last_name                                            -- groups by actor: actor_id, first_name, last_name to get their movie count
+ORDER BY number_movies DESC                                                                -- sorts actors by the greatest number of movies first
+LIMIT 5;                                                                                                      -- returns only the top 5 actors
 
-/*
- Explanation:
- 
-- inner JOIN film_actor fa ON a.actor_id = fa.actor_id:
-links actors to the movies they acted in.
-- inner JOIN film f ON fa.film_id = f.film_id:
-gets movie details, including the release year.
-- WHERE f.release_year > 2015:
-filters only movies released after 2015.
-- COUNT(f.film_id) AS number_movies:
-counts the number of films each actor appeared in.
-- GROUP BY a.actor_id, a.first_name, a.last_name:
-groups by actor: actor_id, first_name, last_name to get their movie count.
-- ORDER BY number_movies DESC:
-sorts actors by the greatest number of movies first.
-- LIMIT 5:
-returns only the top 5 actors.
-
- */
 
 --Number of Drama, Travel, Documentary per year (columns: release_year, number_of_drama_movies, 
 --number_of_travel_movies, number_of_documentary_movies), sorted by release year in descending order.
@@ -105,43 +52,27 @@ returns only the top 5 actors.
 
 SELECT 
               f.release_year,
-              COALESCE(SUM(CASE 
-                                                    WHEN c.name = 'Drama' THEN 1 ELSE 0
-                                             END), 0) AS number_of_drama_movies,
-              COALESCE(SUM(CASE 
-                                                    WHEN c.name = 'Travel' THEN 1 ELSE 0 
-                                             END), 0) AS number_of_travel_movies,
-              COALESCE(SUM(CASE 
-                                                  WHEN c.name = 'Documentary' THEN 1 ELSE 0 
-                                             END), 0) AS number_of_documentary_movies
-FROM   film f
-              inner JOIN film_category f_c ON f.film_id = f_c.film_id
-              inner JOIN category c ON f_c.category_id = c.category_id
-WHERE c.name IN ('Drama', 'Travel', 'Documentary')
-GROUP BY f.release_year
-ORDER BY f.release_year DESC;
+             SUM(CASE                                                                                                -- counts movies for each category for each year; 
+                                WHEN c.name = 'Drama' THEN 1 ELSE 0                           -- I use CASE to count only relevant movies while treating others as 0
+                       END) AS number_of_drama_movies,                                                
+              SUM(CASE 
+                                 WHEN c.name = 'Travel' THEN 1 ELSE 0 
+                       END) AS number_of_travel_movies,
+              SUM(CASE 
+                                 WHEN c.name = 'Documentary' THEN 1 ELSE 0 
+                       END) AS number_of_documentary_movies
+FROM   public.film f
+              INNER JOIN public.film_category f_c ON f.film_id = f_c.film_id                  -- connects movies with their respective categories
+              INNER JOIN public.category c ON f_c.category_id = c.category_id                 -- gets the category names
+WHERE upper(c.name)  IN (upper('Drama') , upper('Travel') , upper('Documentary')) --filters only these three categories of interest
+GROUP BY f.release_year                                                                                             -- aggregates counts for each release year
+ORDER BY f.release_year DESC;                                                                                 -- sorts results by release year in descending order
 
-/*
- Explanation:
- 
-- if a year has no Travel or Documentary movies, without COALESCE, it would return NULL.
-- using COALESCE(..., 0), I ensure that missing counts appear as 0 (in case a year has no movies in a category), making the data more readable.
-- inner JOIN film_category fc ON f.film_id = fc.film_id:
-connects movies with their respective categories.
-- inner JOIN category c ON fc.category_id = c.category_id:
-gets the category names.
-- WHERE c.name IN ('Drama', 'Travel', 'Documentary'):
-filters only these three categories of interest.
-- SUM(CASE WHEN c.name = 'Drama' THEN 1 ELSE 0 END):
-counts movies for each category for each year; I use CASE to count only relevant movies while treating others as 0.
-- GROUP BY f.release_year:
-aggregates counts for each release year.
-- ORDER BY f.release_year DESC:
-sorts results by release year in descending order.
+
 
  
  
- 
+/* 
 Part 2: Solve the following problems using SQL
 
 1. Which three employees generated the most revenue in 2017? They should be awarded a bonus for their outstanding performance. 
@@ -152,11 +83,11 @@ if staff processed the payment then he works in the same store;
 take into account only payment_date
 */
 
-WITH staff_revenue AS (  --First part
+WITH staff_revenue AS (    --First part
     SELECT 
                   p.staff_id, 
                   SUM(p.amount) AS total_revenue
-    FROM payment p
+    FROM public.payment p
     WHERE EXTRACT(YEAR FROM p.payment_date) = 2017
     GROUP BY p.staff_id
 )
@@ -165,16 +96,16 @@ SELECT                            --Third part
               s.first_name, 
               s.last_name, 
     (
-        SELECT s2.store_id   --Second part
-        FROM payment p2
-        JOIN staff s2 ON p2.staff_id = s2.staff_id
+        SELECT s2.store_id    --Second part
+        FROM public.payment p2
+        INNER JOIN staff s2 ON p2.staff_id = s2.staff_id
         WHERE p2.staff_id = s_r.staff_id
         ORDER BY p2.payment_date DESC 
         LIMIT 1
     ) AS store_id,
     s_r.total_revenue
 FROM staff_revenue s_r
-JOIN staff s ON s_r.staff_id = s.staff_id
+JOIN public.staff s ON s_r.staff_id = s.staff_id
 ORDER BY s_r.total_revenue DESC
 LIMIT 3;
 
@@ -209,82 +140,71 @@ Third part:
  To determine expected age please use 'Motion Picture Association film rating system
  */
 
--- I broke this task in two parts:
--- First part: count the number of times each film was rented.
--- Second part: determine expected audience age using 'Motion Picture Association' film rating system.
 
-WITH movie_rentals AS ( -- First part
+WITH movie_rentals AS ( -- First part: count the number of times each film was rented
     SELECT 
                   f.film_id,
                   f.title,
-                  f.mpaa_rating,
+                  f.rating,
                   COUNT(r.rental_id) AS rental_count
-    FROM rental r
-    JOIN inventory i ON r.inventory_id = i.inventory_id
-    JOIN film f ON i.film_id = f.film_id
-    GROUP BY f.film_id, f.title, f.mpaa_rating
+    FROM public.rental r
+    INNER JOIN  public.inventory i ON r.inventory_id = i.inventory_id
+    INNER JOIN public.film f ON i.film_id = f.film_id
+    GROUP BY f.film_id, f.title, f.rating
 )
-SELECT                      -- Second part
+SELECT                      -- Second part: determine expected audience age using 'Motion Picture Association' film rating system
               film_id, 
               title, 
               rental_count, 
-              mpaa_rating, 
+              rating , 
     CASE 
-              WHEN mpaa_rating = 'G' THEN 'all ages'
-              WHEN mpaa_rating = 'PG' THEN 'ages >= 8'
-              WHEN mpaa_rating = 'PG-13' THEN 'ages >= 13'
-              WHEN mpaa_rating = 'R' THEN 'ages >= 17'
-              WHEN mpaa_rating = 'NC-17' THEN 'ages >=18'
+              WHEN rating = 'G' THEN 'All ages'
+              WHEN rating = 'PG-13' THEN 'Inappropriate for Children Under 13'
+              WHEN rating = 'R' THEN 'Children Under 17 Require Accompanying Adult'
+              WHEN rating = 'NC-17' THEN 'Inappropriate for Children Under 17'
+              WHEN rating = 'PG' THEN 'Parental Guidance Suggested'
               ELSE 'unknown'
     END AS expected_audience_age
 FROM movie_rentals
 ORDER BY rental_count DESC
 LIMIT 5;
     
+
 /*
 Explanation:
  
 - count rentals for every film (COUNT(r.rental_id) AS rental_count):
 joins rental ---> inventory --> film to count rentals for every film_id.
-- group by film (GROUP BY f.film_id, f.title, f.mpaa_rating):
+- group by film (GROUP BY f.film_id, f.title, f.rating):
 ensures I get counts for every  movie.
 - determine expected_audience_age (CASE Statement):
 using recomended 'Motion Picture Association' film rating system.
+'G' -> 'All Ages'
+'PG-13'-> 'Inappropriate for Children Under 13'
+'R'->'Children Under 17 Require Accompanying Adult'
+'NC-17'->'Inappropriate for Children Under 17'
+'PG'-> 'Parental Guidance Suggested'
  */
 
 
 
 --Part 3. Which actors/actresses didn't act for a longer period of time than the others? 
 
---V1: V1: gap between the latest release_year and current year per each actor;
+--V1:  gap between the latest release_year and current year per each actor;
 
 SELECT 
              a.first_name, 
              a.last_name, 
-             MAX(f.release_year) AS latest_movie_year, 
-             (DATE_PART('Year', NOW()) - MAX(f.release_year)) AS years_since_last_movie
-FROM actor a
-            inner JOIN film_actor fa ON a.actor_id = fa.actor_id
-            inner JOIN film f ON fa.film_id = f.film_id
-GROUP BY a.actor_id, a.first_name, a.last_name
-ORDER BY years_since_last_movie DESC;
+             MAX(f.release_year) AS latest_movie_year,                                                             --  gets the most recent movie an actor appeared in
+             (DATE_PART('Year', NOW()) - MAX(f.release_year)) AS years_since_last_movie   -- calculates how many years have passed since their last movie
+FROM public.actor a
+            INNER JOIN public.film_actor fa ON a.actor_id = fa.actor_id
+            INNER JOIN public.film f ON fa.film_id = f.film_id
+GROUP BY a.actor_id, a.first_name, a.last_name                                                                -- ensures I get the most recent movie for each unique actor
+ORDER BY years_since_last_movie DESC;                                                                       -- actors which didn't act for the longest period of time appears first
 
-/*
- Explanation:
- 
--  to extract the desired date field from the current date, let’s pass a field to be extracted ( 'Year' in our case)
- as a first argument and a NOW() function as the second argument to the DATE_PART() function.
- - find the latest movie per actor:
-MAX(f.release_year) gets the most recent movie an actor appeared in.
-- calculate the gap from the current year:
-(DATE_PART('Year', NOW()) - MAX(f.release_year))  AS years_since_last_movie
----> calculates how many years have passed since their last movie.
--group by actor:
-ensures I get the most recent movie for each unique actor.
-- sort by years_since_last_movie DESC:
- actors which didn't act for the longest period of time appears first.
 
- */
+
  
 
 
