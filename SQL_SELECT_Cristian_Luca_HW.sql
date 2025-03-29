@@ -158,11 +158,11 @@ SELECT                      -- Second part: determine expected audience age usin
               rental_count, 
               rating , 
     CASE 
-              WHEN rating = 'G' THEN 'All ages'
-              WHEN rating = 'PG-13' THEN 'Inappropriate for Children Under 13'
-              WHEN rating = 'R' THEN 'Children Under 17 Require Accompanying Adult'
-              WHEN rating = 'NC-17' THEN 'Inappropriate for Children Under 17'
-              WHEN rating = 'PG' THEN 'Parental Guidance Suggested'
+              WHEN upper(rating::text) = upper('G'::text)  THEN 'All ages'
+              WHEN upper(rating::text) = upper('PG-13'::text)  THEN 'Inappropriate for Children Under 13'
+              WHEN upper(rating::text) = upper('R'::text) THEN 'Children Under 17 Require Accompanying Adult'
+              WHEN upper(rating::text) = upper('NC-17'::text) THEN 'Inappropriate for Children Under 17'
+              WHEN upper(rating::text) = upper('PG'::text) THEN 'Parental Guidance Suggested'
               ELSE 'unknown'
     END AS expected_audience_age
 FROM movie_rentals
