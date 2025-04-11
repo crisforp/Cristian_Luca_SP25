@@ -58,7 +58,7 @@ CREATE table IF NOT EXISTS club_schema.guide (
     guide_ID SERIAL PRIMARY KEY, -- Unique guide ID auto-generated
     guide_first_name VARCHAR(100) NOT NULL, --Names rarely exceed 100 characters
     guide_last_name VARCHAR(100) NOT NULL,
-    experience_years INT DEFAULT 3 CHECK (experience_years >= 3), -- GuIDes must have at least 3 years of experience
+    experience_years INT DEFAULT 3 CHECK (experience_years >= 3), -- Guides must have at least 3 years of experience
     guide_phone_number VARCHAR(20) -- International phone numbers (plus signs, dashes) fit within 20 characters
 );
 
@@ -143,7 +143,7 @@ CREATE TABLE IF NOT EXISTS club_schema.rescuer (
 -- Purpose: Stores sensitive medical information for each climber.
 -- Data Integrity:
 -- - climber_ID is UNIQUE, ensuring a one-to-one relationship.
--- - Blood type must be valID according to predefined types.
+-- - Blood type must be valid according to predefined types.
 CREATE TABLE IF NOT EXISTS club_schema.climber_medical_info (
     medical_info_ID SERIAL PRIMARY KEY,
     climber_ID INT UNIQUE NOT NULL, -- One climber = one medical record
@@ -156,7 +156,7 @@ CREATE TABLE IF NOT EXISTS club_schema.climber_medical_info (
 
 --===========
 -- Table: climb_participant
--- Purpose: BrIDge table between climbs and climbers (Many-to-Many).
+-- Purpose: Bridge table between climbs and climbers (Many-to-Many).
 -- Data Integrity:
 -- - Composite Primary Key ensures each climber joins each climb only once.
 CREATE TABLE IF NOT EXISTS club_schema.climb_participant (
@@ -185,7 +185,10 @@ CREATE TABLE IF NOT EXISTS club_schema.climb_rescue (
     -- Rescue records must be deleted if either the climb or the rescuer is deleted.
 );
 
-
+ALTER TABLE club_schema.climb  -- in climb table, add a calculated climb duration column: end_date - start_date
+ADD COLUMN IF NOT EXISTS climb_duration_days INT GENERATED ALWAYS AS (end_date - start_date) STORED;
+-- STORED means it’s physically saved in the database, allowing indexing if needed
+-- IF NOT EXISTS ensures it won’t fail if Iyou run the script again, later
 --============
 -- Add UNIQUE constraint to prevent duplicate areas, mountains, routes
 
@@ -206,61 +209,135 @@ ALTER TABLE club_schema.route ADD CONSTRAINT unique_route UNIQUE (route_name, mo
 ---- Initial Data Population
 
 -- Insert areas safely
+
+--  Insert 'Kilimanjaro Range' if it doesn't exist
 INSERT INTO club_schema.area (area_name, country)
-VALUES 
-('Kilimanjaro Range', 'Tanzania'),
-('Andes Mountains', 'Argentina')
-ON CONFLICT ON CONSTRAINT unique_area DO NOTHING;
+SELECT 'Kilimanjaro Range', 'Tanzania'
+WHERE NOT EXISTS (                       -- insert this record ONLY IF no record like this already exists (without the database throwing an error)
+    SELECT 1 FROM club_schema.area   -- just returns a constant (1) if a row exists; the database only cares whether any row matches the condition
+    WHERE area_name = 'Kilimanjaro Range' AND country = 'Tanzania'
+);
+
+-- Insert 'Andes Mountains' if it doesn't exist
+INSERT INTO club_schema.area (area_name, country)
+SELECT 'Andes Mountains', 'Argentina'
+WHERE NOT EXISTS (
+    SELECT 1 FROM club_schema.area
+    WHERE area_name = 'Andes Mountains' AND country = 'Argentina'
+);
+
 
 -- Insert mountains safely
+
+-- Insert 'Kilimanjaro' mountain if it doesn't exist
 INSERT INTO club_schema.mountain (area_ID, mountain_name, height_meters)
-VALUES 
-(
-  (SELECT area_ID FROM club_schema.area WHERE area_name = 'Kilimanjaro Range'),
-  'Kilimanjaro',
-  5895
-),
-(
-  (SELECT area_ID FROM club_schema.area WHERE area_name = 'Andes Mountains'),
-  'Aconcagua',
-  6961
-)
-ON CONFLICT ON CONSTRAINT unique_mountain DO NOTHING;
+SELECT 
+    area_ID, 'Kilimanjaro', 5895
+FROM club_schema.area
+WHERE area_name = 'Kilimanjaro Range' AND country = 'Tanzania'
+  AND NOT EXISTS (
+      SELECT 1 FROM club_schema.mountain
+      WHERE mountain_name = 'Kilimanjaro'
+        AND area_ID = (SELECT area_ID FROM club_schema.area WHERE area_name = 'Kilimanjaro Range' AND country = 'Tanzania')
+  );
+
+-- Insert 'Aconcagua' mountain if it doesn't exist
+INSERT INTO club_schema.mountain (area_ID, mountain_name, height_meters)
+SELECT 
+    area_ID, 'Aconcagua', 6961
+FROM club_schema.area
+WHERE area_name = 'Andes Mountains' AND country = 'Argentina'
+  AND NOT EXISTS (
+      SELECT 1 FROM club_schema.mountain
+      WHERE mountain_name = 'Aconcagua'
+        AND area_ID = (SELECT area_ID FROM club_schema.area WHERE area_name = 'Andes Mountains' AND country = 'Argentina')
+  );
+
 
 -- Insert routes safely
+
+-- Insert 'Machame Route' if doesn't exist
 INSERT INTO club_schema.route (mountain_ID, route_name, difficulty_level)
-VALUES 
-(
-  (SELECT mountain_ID FROM club_schema.mountain WHERE mountain_name = 'Kilimanjaro'),
-  'Machame Route',
-  'Challenging'
-),
-(
-  (SELECT mountain_ID FROM club_schema.mountain WHERE mountain_name = 'Aconcagua'),
-  'Polish Glacier',
-  'Extremely Difficult'
-)
-ON CONFLICT ON CONSTRAINT unique_route DO NOTHING;
+SELECT 
+    mountain_ID, 'Machame Route', 'Challenging'
+FROM club_schema.mountain
+WHERE mountain_name = 'Kilimanjaro'
+  AND NOT EXISTS (
+      SELECT 1 FROM club_schema.route
+      WHERE route_name = 'Machame Route'
+        AND mountain_ID = (SELECT mountain_ID FROM club_schema.mountain WHERE mountain_name = 'Kilimanjaro')
+  );
+
+-- Insert 'Polish Glacier' if doesn't exist
+INSERT INTO club_schema.route (mountain_ID, route_name, difficulty_level)
+SELECT 
+    mountain_ID, 'Polish Glacier', 'Extremely Difficult'
+FROM club_schema.mountain
+WHERE mountain_name = 'Aconcagua'
+  AND NOT EXISTS (
+      SELECT 1 FROM club_schema.route
+      WHERE route_name = 'Polish Glacier'
+        AND mountain_ID = (SELECT mountain_ID FROM club_schema.mountain WHERE mountain_name = 'Aconcagua')
+  );
 
 -- Insert guides 
+
+-- Insert 'Joseph' , 'Mtui'  if doesn't exist
 INSERT INTO club_schema.guide (guide_first_name, guide_last_name, experience_years, guide_phone_number)
-VALUES 
-('Joseph', 'Mtui', 17, '+255754123456'),
-('Miguel', 'Sanchez', 28, '+542614250871');
+SELECT 'Joseph', 'Mtui', 17, '+255754123456'
+WHERE NOT EXISTS (
+    SELECT 1 FROM club_schema.guide
+    WHERE guide_first_name = 'Joseph' AND guide_last_name = 'Mtui'
+);
+
+-- Insert 'Miguel' , 'Sanchez' if doesn't exist
+INSERT INTO club_schema.guide (guide_first_name, guide_last_name, experience_years, guide_phone_number)
+SELECT 'Miguel', 'Sanchez', 28, '+542614250871'
+WHERE NOT EXISTS (
+    SELECT 1 FROM club_schema.guide
+    WHERE guide_first_name = 'Miguel' AND guide_last_name = 'Sanchez'
+);
+
 
 
 -- Insert climbers 
+
+-- Insert 'Cristian' , 'Luca' if doesn't exist
 INSERT INTO club_schema.climber (climber_first_name, climber_last_name, address, gender)
-VALUES 
-('Cristian', 'Luca', '12 Kogalniceanu Street, Chisinau, Moldova', 'M'),
-('Monica', 'Luca', '164 Stefan cel Mare Boulevard, Chisinau, Moldova', 'F');
+SELECT 'Cristian', 'Luca', '12 Kogalniceanu Street, Chisinau, Moldova', 'M'
+WHERE NOT EXISTS (
+    SELECT 1 FROM club_schema.climber
+    WHERE climber_first_name = 'Cristian' AND climber_last_name = 'Luca'
+);
+
+-- Insert 'Monica' , ' Luca' if doesn't exist
+INSERT INTO club_schema.climber (climber_first_name, climber_last_name, address, gender)
+SELECT 'Monica', 'Luca', '164 Stefan cel Mare Boulevard, Chisinau, Moldova', 'F'
+WHERE NOT EXISTS (
+    SELECT 1 FROM club_schema.climber
+    WHERE climber_first_name = 'Monica' AND climber_last_name = 'Luca'
+);
+
 
 
 -- Insert rescuers
+
+-- Insert 'Valentin', 'Damaris' if doesn't exists
 INSERT INTO club_schema.rescuer (rescuer_first_name, rescuer_last_name, organization, rescuer_contact)
-VALUES 
-('Valentin', 'Damaris', 'Kilimanjaro SAR', '+255758222255'),
-('Maria', 'Dumitrescu', 'Aconcagua National Park Visitor Center', '+542614258751');
+SELECT 'Valentin', 'Damaris', 'Kilimanjaro SAR', '+255758222255'
+WHERE NOT EXISTS (
+    SELECT 1 FROM club_schema.rescuer
+    WHERE rescuer_first_name = 'Valentin' AND rescuer_last_name = 'Damaris'
+);
+
+-- Insert 'Maria',  'Dumitrescu' if doesn't exists
+INSERT INTO club_schema.rescuer (rescuer_first_name, rescuer_last_name, organization, rescuer_contact)
+SELECT 'Maria', 'Dumitrescu', 'Aconcagua National Park Visitor Center', '+542614258751'
+WHERE NOT EXISTS (
+    SELECT 1 FROM club_schema.rescuer
+    WHERE rescuer_first_name = 'Maria' AND rescuer_last_name = 'Dumitrescu'
+);
+
 
 
 --===========
@@ -298,36 +375,33 @@ UPDATE club_schema.climb_rescue SET record_ts = CURRENT_DATE WHERE record_ts IS 
 
 /*
  
-Database  - a short recap:
+Database --> overview:
 
-The database has been  normalized to 3NF to eliminate redundancy, ensure data integrity, and promote scalability.
+- The database has been normalized to Third Normal Form (3NF) to eliminate redundancy, ensure data integrity, 
+  and supports future growth, larger data volumes, and easy addition of new features without major redesign.
 
-Primary keys (PKs) uniquely IDentify records in all tables.
+- Primary keys (PKs) uniquely identify records across all tables.
 
-Foreign keys (FKs) enforce strict referential integrity across relationships.
+- Foreign keys (FKs) enforce referential integrity across relationships.
 
-ON DELETE CASCADE was applied  across foreign key constraints to enforce referential integrity 
-and automatically clean up dependent data upon parent deletions.
+- ON DELETE CASCADE has been consistently applied across foreign key constraints to automatically clean up dependent data upon parent deletions, maintaining relational integrity.
 
-Appropriate data types have been chosen for all columns (such as VARCHAR for names, DATE for start dates).
+- Appropriate data types have been chosen for all columns (such as: `VARCHAR` for names, `DATE` for start and end dates, `INT` for IDs and heights).
 
-Constraints such as NOT NULL, CHECK, UNIQUE, and DEFAULT values are applied to ensure data integrity and consistency in the database.
+- Constraints such as `NOT NULL`, `CHECK`, `UNIQUE`, and `DEFAULT` values are used to ensure data integrity and consistency throughout the database.
 
-SERIAL data types are used for primary keys to ensure automatic ID generation.
+- SERIAL data types are used for all primary keys to ensure automatic ID generation.
 
-A record_ts field (with DEFAULT CURRENT_DATE) has been added across all tables using ALTER TABLE statements as a requirement.
+- A `record_ts` field (with `DEFAULT CURRENT_DATE`) has been added to all tables with the help of `ALTER TABLE` statements, and initialized for existing rows, allowing record tracking.
 
-In this physical database design, GENERATED ALWAYS AS columns were not implemented because the current logical model
-does not include any computed attributes. All columns represent manually collected, independently meaningful data points 
-(names, dates, routes, equipment). If future business requirements introduce calculated fields (such as calculating total climb days as end_date - start_date),
-then GENERATED ALWAYS AS would be consIDered  to automate such calculations at the database level.
+- A calculated field (`climb_duration_days`) has been introduced in the `climb` table using a `GENERATED ALWAYS AS (end_date - start_date) STORED` column to automatically compute the duration of a climb.
 
-DDL with IF NOT EXISTS (such as CREATE TABLE IF NOT EXISTS) prevents errors when objects already exist.
+- DDL statements use `IF NOT EXISTS` (such as: `CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`) to make the script safe for multiple executions without errors.
 
-DML with ON CONFLICT DO NOTHING (such as INSERT INTO ... ON CONFLICT DO NOTHING) avoids inserting duplicate records.
+- DML inserts have been rewritten to use `INSERT ... SELECT ... WHERE NOT EXISTS` to prevent duplicate data manually, without relying on `ON CONFLICT DO NOTHING`.
 
-Unique constraints and ON CONFLICT clauses have been implemented across all critical tables to ensure no duplicate data even when executed multiple times.
- 
-Sample data inserts were designed dynamically using RETURNING and SELECT subqueries to avoid hardcoded IDs and to ensure data integrity.
+- Unique constraints (`UNIQUE`) have been implemented across critical tables (area, mountain, route) to enforce uniqueness at the database level.
+
+- Sample data inserts dynamically (using `SELECT` subqueries ) retrieve necessary IDs based on business attributes (like names), avoiding any hardcoded key assumptions.
 
 */
