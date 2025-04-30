@@ -1,160 +1,178 @@
-
+-- ================================================
 -- Task 2: Implement role-based authentication model for dvd_rental database
+-- ================================================
 
 
-/*1.  Create a new user with the username "rentaluser" and the password "rentalpassword".
-Give the user the ability to connect to the database but no other permissions.*/
+-- Cleanup: Drop roles if they exist to ensure a clean setup
+DROP ROLE IF EXISTS rentaluser;
+DROP ROLE IF EXISTS rental;
+DROP ROLE IF EXISTS client_maria_stefania;
 
-CREATE ROLE rentaluser WITH LOGIN PASSWORD 'rentalpassword';
+-- 2.1. Create rentaluser with login capability but no initial permissions
+-- Note: PostgreSQL does not support IF NOT EXISTS in CREATE ROLE directly,
+-- so use a conditional check on pg_roles
 
--- This creates a role with login capability but no database privileges by default.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rentaluser') THEN
+        CREATE ROLE rentaluser WITH LOGIN PASSWORD 'rentalpassword';
+    END IF;
+END $$;
 
-/*2.  Grant "rentaluser" SELECT permission for the "customer" table. 
-Сheck to make sure this permission works correctly—write a SQL query to select all customers.*/
+-- 2.2. Grant SELECT on public.customer to rentaluser
+GRANT SELECT ON TABLE public.customer TO rentaluser;
 
-GRANT SELECT ON TABLE customer TO rentaluser;
-
--- This allows rentaluser to query the customer table.
-
-/*3.  Create a new user group called "rental" and add "rentaluser" to the group. */
+-- Test SELECT as rentaluser
 
 SET ROLE rentaluser;
-SELECT * FROM customer;
+SELECT customer_id, first_name, last_name FROM public.customer LIMIT 5;
 RESET ROLE;
 
--- Running this as rentaluser should return all rows from customer. If an error occurs (such as: permission denied), the grant failed.
--- The output will include columns like customer_id, first_name, last_name, etc.
+-- 2.3. Create rental group role for privilege inheritance
 
-/*4.   Grant the "rental" group INSERT and UPDATE permissions for the "rental" table.
-Insert a new row and update one existing row in the "rental" table under that role. */
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rental') THEN
+        CREATE ROLE rental;
+    END IF;
+END $$;
 
-CREATE ROLE rental;
+-- Add rentaluser to rental group
+
 GRANT rental TO rentaluser;
 
--- rental is a group role (no LOGIN by default), and rentaluser is now a member, inheriting its privileges.
+-- 2.4. Grant INSERT and UPDATE on public.rental to rental group
 
+GRANT INSERT, UPDATE ON TABLE public.rental TO rental;
 
-/*5.  Revoke the "rental" group's INSERT permission for the "rental" table. 
-Try to insert new rows into the "rental" table make sure this action is denied.*/
+-- Validate IDs for INSERT and UPDATE (to respect FK constraints)
 
-GRANT INSERT, UPDATE ON TABLE rental TO rental;
+SELECT inventory_id FROM public.inventory WHERE inventory_id = 1;
+SELECT customer_id FROM public.customer WHERE customer_id = 1;
+SELECT staff_id FROM public.staff WHERE staff_id = 1;
 
--- This allows members of the rental group to insert new rows and update existing rows in the rental table.
-
-/*6. Create a personalized role for any customer already existing in the dvd_rental database. 
-The name of the role name must be client_{first_name}_{last_name} (omit curly brackets).
-The customer's payment and rental history must not be empty. */
-
- -- Insert a new row and update an existing row
- 
--- Insert a new row (as rentaluser): 
+-- Test INSERT as rentaluser
 
 SET ROLE rentaluser;
-INSERT INTO rental (rental_date, inventory_id, customer_id, staff_id, last_update)
-VALUES (CURRENT_TIMESTAMP, 1, 1, 1, CURRENT_TIMESTAMP);
+INSERT INTO public.rental (rental_date, inventory_id, customer_id, staff_id, last_update)
+VALUES (CURRENT_TIMESTAMP, 1, 1, 1, CURRENT_TIMESTAMP)
+RETURNING rental_id;
 RESET ROLE;
 
--- This adds a new rental record. Adjust inventory_id, customer_id, and staff_id to valid existing IDs from the inventory, customer, and staff tables.
-
-
--- Update an existing row (as rentaluser): 
+-- Test UPDATE as rentaluser
 
 SET ROLE rentaluser;
-UPDATE rental SET return_date = CURRENT_TIMESTAMP WHERE rental_id = 1;
+UPDATE public.rental 
+SET return_date = CURRENT_TIMESTAMP 
+WHERE rental_id = (SELECT MAX(rental_id) FROM public.rental)
+RETURNING rental_id, return_date;
 RESET ROLE;
 
--- This updates the return_date for rental_id = 1 (use an existing ID from the table).
+-- 2.5. Revoke INSERT on public.rental from rental group and test denial
 
+REVOKE INSERT ON TABLE public.rental FROM rental;
 
--- Revoke INSERT permission and test denial
-
--- REVOKE INSERT ON TABLE rental FROM rental;
-
--- Test insertion denial (as rentaluser): 
-
--- Check inventory ID
-SELECT inventory_id FROM inventory WHERE inventory_id = 1;
-
--- Check customer ID
-SELECT customer_id FROM customer WHERE customer_id = 1;
-
--- Check staff ID
-SELECT staff_id FROM staff WHERE staff_id = 1;
-
+-- Test INSERT denial as rentaluser (should raise permission error)
 SET ROLE rentaluser;
-INSERT INTO rental (rental_date, inventory_id, customer_id, staff_id, last_update)
+-- Expect: ERROR: permission denied for table rental
+INSERT INTO public.rental (rental_date, inventory_id, customer_id, staff_id, last_update)
 VALUES (CURRENT_TIMESTAMP, 2, 2, 2, CURRENT_TIMESTAMP);
 RESET ROLE;
 
--- This should fail with a permission denied error, confirming the revocation.
+-- 2.6. Create personalized role dynamically for a customer with non-empty history
+
+DO $$
+DECLARE
+    v_first_name VARCHAR := 'MARIA';
+    v_last_name VARCHAR := 'STEFANIA';
+    v_customer_id INTEGER;
+    v_role_name VARCHAR;
+BEGIN
+    -- Find a customer with rental and payment history
+    SELECT c.customer_id INTO v_customer_id
+    FROM public.customer c
+    INNER JOIN public.rental r ON c.customer_id = r.customer_id
+    INNER JOIN public.payment p ON c.customer_id = p.customer_id
+    WHERE c.first_name = v_first_name AND c.last_name = v_last_name
+    GROUP BY c.customer_id
+    HAVING COUNT(r.rental_id) > 0 AND COUNT(p.payment_id) > 0
+    LIMIT 1;
+
+    v_role_name := 'client_' || LOWER(v_first_name) || '_' || LOWER(v_last_name);
+
+    -- Create personalized role if not exists
+    
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = v_role_name) THEN
+        EXECUTE format('CREATE ROLE %I WITH LOGIN PASSWORD %L', v_role_name, v_first_name || 'pass');
+    END IF;
+
+    -- Grant SELECT privileges to personalized role
+    
+    EXECUTE format('GRANT SELECT ON TABLE public.customer TO %I', v_role_name);
+    EXECUTE format('GRANT SELECT ON TABLE public.rental TO %I', v_role_name);
+    EXECUTE format('GRANT SELECT ON TABLE public.payment TO %I', v_role_name);
+END $$;
 
 
- -- Create a personalized role for an existing customer
--- Find a customer with non-empty payment and rental history: 
+--========================
+-- Task 3: Implement Row-Level Security
+--========================
 
-SELECT c.customer_id, c.first_name, c.last_name
-FROM customer c
-JOIN rental r ON c.customer_id = r.customer_id
-JOIN payment p ON c.customer_id = p.customer_id
-GROUP BY c.customer_id, c.first_name, c.last_name
-HAVING COUNT(r.rental_id) > 0 AND COUNT(p.payment_id) > 0
-LIMIT 1;
+-- 3.1 Enable RLS on target tables
 
--- Suppose the result is customer_id = 1, first_name = 'MARIA', last_name = 'STEFANIA'.
+ALTER TABLE public.rental ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.payment ENABLE ROW LEVEL SECURITY;
 
--- Create the role: 
+-- 3.2 Create RLS policies for personalized role with specific customer_id
 
-CREATE ROLE client maria Stefania WITH LOGIN PASSWORD 'mariapass';
+DO $$
+DECLARE
+    v_customer_id INTEGER;
+BEGIN
+    SELECT customer_id INTO v_customer_id
+    FROM public.customer
+    WHERE first_name = 'MARIA' AND last_name = 'STEFANIA'
+    LIMIT 1;
 
---This creates a role named client_maria stefania for the customer.
--- ======================================================
+    -- Drop policies if they already exist to avoid conflict
+    
+    DROP POLICY IF EXISTS rental_own_data ON public.rental;
+    DROP POLICY IF EXISTS payment_own_data ON public.payment;
 
+    -- Create policy for SELECT access only (more secure than FOR ALL)
+    
+    EXECUTE format('
+        CREATE POLICY rental_own_data ON public.rental
+        FOR SELECT TO client_maria_stefania
+        USING (customer_id = %L)', v_customer_id);
+    COMMENT ON POLICY rental_own_data ON public.rental 
+        IS 'Allows client_maria_stefania to view only her rental records.';
 
--- Task 3: Implement row-level security
+    EXECUTE format('
+        CREATE POLICY payment_own_data ON public.payment
+        FOR SELECT TO client_maria_stefania
+        USING (customer_id = %L)', v_customer_id);
+    COMMENT ON POLICY payment_own_data ON public.payment 
+        IS 'Allows client_maria_stefania to view only her payment records.';
+END $$;
 
-/*3.1:  Read about Row-Level Security
-• Refer to https://www.postgresql.org/docs/12/ddl-rowsecurity.html for details on enabling and using RLS. 
-Key points include using ALTER TABLE ... ENABLE ROW LEVEL SECURITY and CREATE POLICY to define access rules.*/
+-- 3.3 Test RLS access as client_maria_stefania
 
-/*3.2:  Configure RLS for the "rental" and "payment" tables
- Enable RLS on rental and payment: */
+SET ROLE client_maria_stefania;
+SELECT customer_id, rental_id, rental_date 
+FROM public.rental 
+LIMIT 5;
 
-ALTER TABLE rental ENABLE ROW LEVEL SECURITY;
-ALTER TABLE payment ENABLE ROW LEVEL SECURITY;
-
---Create policies to restrict access to the customer’s own data: 
-
-SELECT customer_id FROM customer
-WHERE first_name = 'MARIA' AND last_name = 'STEFANIA';
--- For rental
-CREATE POLICY rental_own_data ON rental
-FOR ALL
-TO client_maria_stefania
-USING (customer_id = 1);
-
--- For payment
-CREATE POLICY payment_own_data ON payment
-FOR ALL
-TO client_maria_stefania
-USING (customer_id = 1);
-
--- Now it will restrict all access to only rows where customer_id = 1.
-
-/*3.3:  Write a query to verify the restriction
-Test the query as client_maria stefania: */
-
-SET ROLE client_maria stefania;
-SELECT * FROM rental;
-SELECT * FROM payment;
+SELECT customer_id, payment_id, amount 
+FROM public.payment 
+LIMIT 5;
 RESET ROLE;
 
--- This should return only the rows where customer_id matches Maria Stefania’s ID. If other rows appear, the policy is misconfigured.
+-- 3.4 Test full SELECT access (no RLS filter) for rentaluser
 
--- Test with a different user (such as:  rentaluser): 
+GRANT SELECT ON TABLE public.rental TO rentaluser;
 SET ROLE rentaluser;
-SELECT * FROM rental;
+SELECT customer_id, rental_id, rental_date FROM public.rental LIMIT 5;
 RESET ROLE;
 
--- Without a matching policy, rentaluser should see all rows (if it has SELECT on rental), 
--- confirming the policy applies only to client_maria stefania.
 
