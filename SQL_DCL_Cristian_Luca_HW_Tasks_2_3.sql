@@ -2,16 +2,11 @@
 -- Task 2: Implement role-based authentication model for dvd_rental database
 -- ================================================
 
-
--- Cleanup: Drop roles if they exist to ensure a clean setup
+-- Cleanup section 
 DROP ROLE IF EXISTS rentaluser;
 DROP ROLE IF EXISTS rental;
-DROP ROLE IF EXISTS client_maria_stefania;
 
--- 2.1. Create rentaluser with login capability but no initial permissions
--- Note: PostgreSQL does not support IF NOT EXISTS in CREATE ROLE directly,
--- so use a conditional check on pg_roles
-
+-- Create rentaluser login role (if not exists)
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rentaluser') THEN
@@ -19,17 +14,10 @@ BEGIN
     END IF;
 END $$;
 
--- 2.2. Grant SELECT on public.customer to rentaluser
+-- Grant SELECT on customer table to rentaluser
 GRANT SELECT ON TABLE public.customer TO rentaluser;
 
--- Test SELECT as rentaluser
-
-SET ROLE rentaluser;
-SELECT customer_id, first_name, last_name FROM public.customer LIMIT 5;
-RESET ROLE;
-
--- 2.3. Create rental group role for privilege inheritance
-
+-- Create 'rental' group role for privilege grouping (if not exists)
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rental') THEN
@@ -37,142 +25,131 @@ BEGIN
     END IF;
 END $$;
 
--- Add rentaluser to rental group
-
+-- Assign rentaluser to rental group
 GRANT rental TO rentaluser;
 
--- 2.4. Grant INSERT and UPDATE on public.rental to rental group
-
+-- Grant INSERT and UPDATE on rental table to rental group
 GRANT INSERT, UPDATE ON TABLE public.rental TO rental;
 
--- Validate IDs for INSERT and UPDATE (to respect FK constraints)
 
-SELECT inventory_id FROM public.inventory WHERE inventory_id = 1;
-SELECT customer_id FROM public.customer WHERE customer_id = 1;
-SELECT staff_id FROM public.staff WHERE staff_id = 1;
+-- Procedure to dynamically create a personalized client role
+-- and grant appropriate SELECT permissions
 
--- Test INSERT as rentaluser
 
-SET ROLE rentaluser;
-INSERT INTO public.rental (rental_date, inventory_id, customer_id, staff_id, last_update)
-VALUES (CURRENT_TIMESTAMP, 1, 1, 1, CURRENT_TIMESTAMP)
-RETURNING rental_id;
-RESET ROLE;
+DROP PROCEDURE IF EXISTS create_client_role;
 
--- Test UPDATE as rentaluser
-
-SET ROLE rentaluser;
-UPDATE public.rental 
-SET return_date = CURRENT_TIMESTAMP 
-WHERE rental_id = (SELECT MAX(rental_id) FROM public.rental)
-RETURNING rental_id, return_date;
-RESET ROLE;
-
--- 2.5. Revoke INSERT on public.rental from rental group and test denial
-
-REVOKE INSERT ON TABLE public.rental FROM rental;
-
--- Test INSERT denial as rentaluser (should raise permission error)
-SET ROLE rentaluser;
--- Expect: ERROR: permission denied for table rental
-INSERT INTO public.rental (rental_date, inventory_id, customer_id, staff_id, last_update)
-VALUES (CURRENT_TIMESTAMP, 2, 2, 2, CURRENT_TIMESTAMP);
-RESET ROLE;
-
--- 2.6. Create personalized role dynamically for a customer with non-empty history
-
-DO $$
+CREATE OR REPLACE PROCEDURE create_client_role(p_first_name TEXT, p_last_name TEXT)
+LANGUAGE plpgsql
+AS $$
 DECLARE
-    v_first_name VARCHAR := 'MARIA';
-    v_last_name VARCHAR := 'STEFANIA';
     v_customer_id INTEGER;
-    v_role_name VARCHAR;
+    v_role_name TEXT;
 BEGIN
     -- Find a customer with rental and payment history
     SELECT c.customer_id INTO v_customer_id
     FROM public.customer c
-    INNER JOIN public.rental r ON c.customer_id = r.customer_id
-    INNER JOIN public.payment p ON c.customer_id = p.customer_id
-    WHERE c.first_name = v_first_name AND c.last_name = v_last_name
+    JOIN public.rental r ON c.customer_id = r.customer_id
+    JOIN public.payment p ON c.customer_id = p.customer_id
+    WHERE c.first_name = p_first_name AND c.last_name = p_last_name
     GROUP BY c.customer_id
     HAVING COUNT(r.rental_id) > 0 AND COUNT(p.payment_id) > 0
     LIMIT 1;
 
-    v_role_name := 'client_' || LOWER(v_first_name) || '_' || LOWER(v_last_name);
-
-    -- Create personalized role if not exists
-    
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = v_role_name) THEN
-        EXECUTE format('CREATE ROLE %I WITH LOGIN PASSWORD %L', v_role_name, v_first_name || 'pass');
+    IF v_customer_id IS NULL THEN
+        RAISE EXCEPTION 'No qualifying customer found for: % %', p_first_name, p_last_name;
     END IF;
 
-    -- Grant SELECT privileges to personalized role
-    
-    EXECUTE format('GRANT SELECT ON TABLE public.customer TO %I', v_role_name);
-    EXECUTE format('GRANT SELECT ON TABLE public.rental TO %I', v_role_name);
-    EXECUTE format('GRANT SELECT ON TABLE public.payment TO %I', v_role_name);
-END $$;
+    -- Construct role name
+    v_role_name := format('client_%s_%s', lower(p_first_name), lower(p_last_name));
+
+    -- Create role if not exists
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = v_role_name) THEN
+        EXECUTE format('CREATE ROLE %I WITH LOGIN PASSWORD %L;', v_role_name, p_first_name || 'pass');
+    END IF;
+
+    -- Grant necessary table privileges to the role
+    EXECUTE format('GRANT SELECT ON public.customer TO %I;', v_role_name);
+    EXECUTE format('GRANT SELECT ON public.rental TO %I;', v_role_name);
+    EXECUTE format('GRANT SELECT ON public.payment TO %I;', v_role_name);
+
+    RAISE NOTICE 'Client role created and privileges granted to: %', v_role_name;
+END;
+$$;
+
+
+-- Example usage: dynamically create access for any client
+CALL create_client_role('Maria', 'Stefania');
+-- CALL create_client_role('Tudor', 'Alexandru'); -- another example
+
 
 
 --========================
 -- Task 3: Implement Row-Level Security
 --========================
 
--- 3.1 Enable RLS on target tables
+-- Task 3: Dynamic Row-Level Security Setup
+-- Avoids hardcoded user IDs and names
 
-ALTER TABLE public.rental ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.payment ENABLE ROW LEVEL SECURITY;
 
--- 3.2 Create RLS policies for personalized role with specific customer_id
+DROP PROCEDURE IF EXISTS enable_rls_for_client;
 
-DO $$
+CREATE OR REPLACE PROCEDURE enable_rls_for_client(
+    p_first_name TEXT,
+    p_last_name TEXT
+)
+LANGUAGE plpgsql
+AS $$
 DECLARE
     v_customer_id INTEGER;
+    v_role_name TEXT;
 BEGIN
+    -- Enable RLS on required tables
+    ALTER TABLE public.rental ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE public.payment ENABLE ROW LEVEL SECURITY;
+
+    -- Fetch customer_id dynamically
     SELECT customer_id INTO v_customer_id
     FROM public.customer
-    WHERE first_name = 'MARIA' AND last_name = 'STEFANIA'
+    WHERE first_name = p_first_name AND last_name = p_last_name
     LIMIT 1;
 
-    -- Drop policies if they already exist to avoid conflict
-    
-    DROP POLICY IF EXISTS rental_own_data ON public.rental;
-    DROP POLICY IF EXISTS payment_own_data ON public.payment;
+    IF v_customer_id IS NULL THEN
+        RAISE EXCEPTION 'No customer found for % %', p_first_name, p_last_name;
+    END IF;
 
-    -- Create policy for SELECT access only (more secure than FOR ALL)
-    
-    EXECUTE format('
+    -- Build dynamic role name
+    v_role_name := format('client_%s_%s', lower(p_first_name), lower(p_last_name));
+
+    -- Create the client role if it doesn't exist
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_role_name) THEN
+        EXECUTE format('CREATE ROLE %I LOGIN PASSWORD ''default123'';', v_role_name);
+    END IF;
+
+    -- Drop existing policies if they exist
+    EXECUTE format('DROP POLICY IF EXISTS rental_own_data ON public.rental;');
+    EXECUTE format('DROP POLICY IF EXISTS payment_own_data ON public.payment;');
+
+    -- Create RLS policy for rental table
+    EXECUTE format($f$
         CREATE POLICY rental_own_data ON public.rental
-        FOR SELECT TO client_maria_stefania
-        USING (customer_id = %L)', v_customer_id);
-    COMMENT ON POLICY rental_own_data ON public.rental 
-        IS 'Allows client_maria_stefania to view only her rental records.';
+        FOR SELECT TO %I
+        USING (customer_id = %s);
+    $f$, v_role_name, v_customer_id);
 
-    EXECUTE format('
+    -- Create RLS policy for payment table
+    EXECUTE format($f$
         CREATE POLICY payment_own_data ON public.payment
-        FOR SELECT TO client_maria_stefania
-        USING (customer_id = %L)', v_customer_id);
-    COMMENT ON POLICY payment_own_data ON public.payment 
-        IS 'Allows client_maria_stefania to view only her payment records.';
-END $$;
+        FOR SELECT TO %I
+        USING (customer_id = %s);
+    $f$, v_role_name, v_customer_id);
 
--- 3.3 Test RLS access as client_maria_stefania
+    RAISE NOTICE 'RLS setup completed for role: %', v_role_name;
+END;
+$$;
 
-SET ROLE client_maria_stefania;
-SELECT customer_id, rental_id, rental_date 
-FROM public.rental 
-LIMIT 5;
 
-SELECT customer_id, payment_id, amount 
-FROM public.payment 
-LIMIT 5;
-RESET ROLE;
-
--- 3.4 Test full SELECT access (no RLS filter) for rentaluser
-
-GRANT SELECT ON TABLE public.rental TO rentaluser;
-SET ROLE rentaluser;
-SELECT customer_id, rental_id, rental_date FROM public.rental LIMIT 5;
-RESET ROLE;
+-- Example usage:
+CALL enable_rls_for_client('Maria', 'Stefania');
+-- CALL enable_rls_for_client('Tudor', 'Alexandru');
 
 
